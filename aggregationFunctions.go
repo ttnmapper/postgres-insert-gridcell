@@ -46,7 +46,12 @@ func aggregateNewData(message types.TtnMapperUplinkMessage) {
 }
 
 func aggregateMovedGateway(movedGateway types.TtnMapperGatewayMoved) {
-	log.Println("Gateway moved")
+
+	seconds := movedGateway.Time / 1000000000
+	nanos := movedGateway.Time % 1000000000
+	movedTime := time.Unix(seconds, nanos)
+
+	log.Println("Gateway ", movedGateway.GatewayId, "moved at ", movedTime)
 
 	// Find the antenna IDs for the moved gateway
 	var antennas []types.Antenna
@@ -59,7 +64,7 @@ func aggregateMovedGateway(movedGateway types.TtnMapperGatewayMoved) {
 
 		// Get all existing packets since gateway last moved
 		var packets []types.Packet
-		db.Where("antenna_id = ? AND time > ?", antenna.ID, movedGateway.Time).Find(&packets)
+		db.Where("antenna_id = ? AND time > ?", antenna.ID, movedTime).Find(&packets)
 
 		for _, packet := range packets {
 			incrementBucket(antenna.ID, packet.Latitude, packet.Longitude, packet.Time, packet.Rssi, packet.Snr)
