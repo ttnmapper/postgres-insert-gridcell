@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/j4/gosm"
+	"log"
 	"sync"
 	"time"
 	"ttnmapper-postgres-insert-gridcell/types"
@@ -77,9 +78,8 @@ func incrementBucket(antennaId uint, latitude float64, longitude float64, time t
 		gridCellDb := types.GridCell{AntennaID: antennaId, X: tile.X, Y: tile.Y}
 		err := db.FirstOrCreate(&gridCellDb, &gridCellDb).Error
 		if err != nil {
-			return
+			failOnError(err, "Failed to find db entry for grid cell")
 		}
-		gridCellDbCache.Store(gridCellIndexer, gridCellDb)
 	}
 
 	signal := rssi
@@ -118,5 +118,8 @@ func incrementBucket(antennaId uint, latitude float64, longitude float64, time t
 	}
 
 	// Save to db
+	log.Println(prettyPrint(gridCellDb))
 	db.Save(&gridCellDb)
+
+	gridCellDbCache.Store(gridCellIndexer, gridCellDb)
 }
