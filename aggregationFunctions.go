@@ -72,7 +72,9 @@ func incrementBucket(antennaId uint, latitude float64, longitude float64, time t
 
 	tile := gosm.NewTileWithLatLong(latitude, longitude, 19)
 
-	var gridCellDb types.GridCell
+	gridCellDb := types.GridCell{}
+
+	// Try and find in cache first
 	gridCellIndexer := types.GridCellIndexer{AntennaId: antennaId, X: tile.X, Y: tile.Y}
 	i, ok := gridCellDbCache.Load(gridCellIndexer)
 	if ok {
@@ -80,13 +82,14 @@ func incrementBucket(antennaId uint, latitude float64, longitude float64, time t
 		log.Println("Found grid cell in cache")
 		log.Println(gridCellDb)
 	} else {
-		gridCellDb := types.GridCell{AntennaID: antennaId, X: tile.X, Y: tile.Y}
+		gridCellDb.AntennaID = antennaId
+		gridCellDb.X = tile.X
+		gridCellDb.Y = tile.Y
 		err := db.FirstOrCreate(&gridCellDb, &gridCellDb).Error
 		if err != nil {
 			failOnError(err, "Failed to find db entry for grid cell")
 		}
 		log.Println("Found grid cell in db")
-		log.Println(gridCellDb)
 	}
 
 	signal := rssi
@@ -126,7 +129,7 @@ func incrementBucket(antennaId uint, latitude float64, longitude float64, time t
 
 	// Save to db
 	log.Println("Storing in DB")
-	log.Println(prettyPrint(gridCellDb))
+	log.Println(gridCellDb)
 	db.Save(&gridCellDb)
 
 	gridCellDbCache.Store(gridCellIndexer, gridCellDb)
