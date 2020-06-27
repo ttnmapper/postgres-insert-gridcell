@@ -118,5 +118,5 @@ func incrementBucket(antennaId uint, latitude float64, longitude float64, time t
 	}
 
 	// Save to db
-	db.Save(gridCellDb)
+	db.Save(&gridCellDb)
 }
