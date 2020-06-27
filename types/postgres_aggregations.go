@@ -4,10 +4,10 @@ import "time"
 
 type GridCell struct {
 	ID        uint
-	AntennaID uint
+	AntennaID uint `gorm:"UNIQUE_INDEX:idx_grid_cell"`
 
-	X int
-	Y int
+	X int `gorm:"UNIQUE_INDEX:idx_grid_cell"`
+	Y int `gorm:"UNIQUE_INDEX:idx_grid_cell"`
 	// Z is always 19
 
 	LastUpdated time.Time

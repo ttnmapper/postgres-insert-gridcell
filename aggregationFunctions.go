@@ -77,7 +77,7 @@ func incrementBucket(antennaId uint, latitude float64, longitude float64, time t
 	i, ok := gridCellDbCache.Load(gridCellIndexer)
 	if ok {
 		gridCellDb = i.(types.GridCell)
-		log.Println("Found gridcell in cache")
+		log.Println("Found grid cell in cache")
 		log.Println(gridCellDb)
 	} else {
 		gridCellDb := types.GridCell{AntennaID: antennaId, X: tile.X, Y: tile.Y}
@@ -85,7 +85,7 @@ func incrementBucket(antennaId uint, latitude float64, longitude float64, time t
 		if err != nil {
 			failOnError(err, "Failed to find db entry for grid cell")
 		}
-		log.Println("Found gridcell in db")
+		log.Println("Found grid cell in db")
 		log.Println(gridCellDb)
 	}
 
