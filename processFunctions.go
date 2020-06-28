@@ -15,6 +15,11 @@ func processNewData() {
 				continue
 			}
 
+			// This aggregation does not use experiment data
+			if message.Experiment != "" {
+				continue
+			}
+
 			aggregateNewData(message)
 		}
 	}()

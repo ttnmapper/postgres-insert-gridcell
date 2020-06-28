@@ -85,6 +85,13 @@ func aggregateMovedGateway(movedGateway types.TtnMapperGatewayMoved) {
 
 func incrementBucket(antennaId uint, latitude float64, longitude float64, time time.Time, rssi float32, snr float32) {
 
+	// https://blog.jochentopf.com/2013-02-04-antarctica-in-openstreetmap.html
+	// The Mercator projection generally used in online maps only covers the area between about 85.0511 degrees South and 85.0511 degrees North.
+	if latitude < -85 || latitude > 85 {
+		// We get a tile index that is invalid if we try handling -90,-180
+		return
+	}
+
 	tile := gosm.NewTileWithLatLong(latitude, longitude, 19)
 
 	gridCellDb := types.GridCell{}
@@ -145,8 +152,9 @@ func incrementBucket(antennaId uint, latitude float64, longitude float64, time t
 
 	// Save to db
 	log.Println("Storing in DB")
-	log.Println(gridCellDb)
+	//log.Println(gridCellDb)
 	db.Save(&gridCellDb)
 
+	// Save to cache
 	gridCellDbCache.Store(gridCellIndexer, gridCellDb)
 }
