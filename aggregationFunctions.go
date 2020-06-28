@@ -57,9 +57,19 @@ func aggregateMovedGateway(movedGateway types.TtnMapperGatewayMoved) {
 	var antennas []types.Antenna
 	db.Where(&types.Antenna{NetworkId: movedGateway.NetworkId, GatewayId: movedGateway.GatewayId}).Find(&antennas)
 
-	// Delete all aggregated data for all the antenna ids
 	for _, antenna := range antennas {
 		log.Println("AntennaID ", antenna.ID)
+
+		// Get a list of grid cells to delete
+		var gridCells []types.GridCell
+		db.Where("antenna_id = ?", antenna.ID).Find(&gridCells)
+
+		// Remove from local cache
+		for _, gridCell := range gridCells {
+			gridCellIndexer := types.GridCellIndexer{AntennaId: gridCell.AntennaID, X: gridCell.X, Y: gridCell.Y}
+			gridCellDbCache.Delete(gridCellIndexer)
+		}
+		// Then remove from sql
 		db.Where(&types.GridCell{AntennaID: antenna.ID}).Delete(&types.GridCell{})
 
 		// Get all existing packets since gateway last moved
