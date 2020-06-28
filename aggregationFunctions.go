@@ -102,6 +102,7 @@ func incrementBucket(antennaId uint, latitude float64, longitude float64, time t
 		gridCellDb.Y = tile.Y
 		err := db.FirstOrCreate(&gridCellDb, &gridCellDb).Error
 		if err != nil {
+			log.Println(antennaId, latitude, longitude, tile.X, tile.Y)
 			failOnError(err, "Failed to find db entry for grid cell")
 		}
 		log.Println("Found grid cell in db")
