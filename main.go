@@ -54,9 +54,36 @@ var myConfiguration = Configuration{
 
 var (
 	// Prometheus stats
-	processedData = promauto.NewCounter(prometheus.CounterOpts{
+	processedLive = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "ttnmapper_gridcell_live_count",
+		Help: "The total number of live messages processed",
+	})
+	processedMoved = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "ttnmapper_gridcell_moved_count",
+		Help: "The total number of moved messages processed",
+	})
+	deletedGridCells = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "ttnmapper_gridcell_deleted_count",
+		Help: "The total number of grid cells deleted",
+	})
+	oldDataProcessed = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "ttnmapper_gridcell_old_data_count",
+		Help: "The total number of old data points processed to grid cells",
+	})
+	updatedGridCells = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "ttnmapper_gridcell_updated_count",
-		Help: "The total number of gridcell updates that are made",
+		Help: "The total number of grid cells updated in database",
+	})
+
+	processLiveDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "ttnmapper_gridcell_live_duration",
+		Help:    "How long the processing and insert of a live message takes",
+		Buckets: []float64{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.5, 2, 5, 10, 100, 1000, 10000},
+	})
+	processMovedDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "ttnmapper_gridcell_moved_duration",
+		Help:    "How long the processing and insert of a moved gateway takes",
+		Buckets: []float64{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.5, 2, 5, 10, 100, 1000, 10000},
 	})
 
 	// Other global vars

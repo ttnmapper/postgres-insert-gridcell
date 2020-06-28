@@ -16,8 +16,12 @@ var (
 )
 
 func aggregateNewData(message types.TtnMapperUplinkMessage) {
+
+	processedLive.Inc()
+
 	// Iterate gateways. We store it flat in the database
 	for _, gateway := range message.Gateways {
+		gatewayStart := time.Now()
 
 		var antennaID uint = 0
 
@@ -42,10 +46,16 @@ func aggregateNewData(message types.TtnMapperUplinkMessage) {
 
 		log.Print("AntennaID ", antennaID)
 		incrementBucket(antennaID, message.Latitude, message.Longitude, entryTime, gateway.Rssi, gateway.Snr)
+
+		// Prometheus stats
+		gatewayElapsed := time.Since(gatewayStart)
+		processLiveDuration.Observe(float64(gatewayElapsed.Nanoseconds()) / 1000.0 / 1000.0) //nanoseconds to milliseconds
 	}
 }
 
 func aggregateMovedGateway(movedGateway types.TtnMapperGatewayMoved) {
+
+	processedMoved.Inc()
 
 	seconds := movedGateway.Time / 1000000000
 	nanos := movedGateway.Time % 1000000000
@@ -58,6 +68,8 @@ func aggregateMovedGateway(movedGateway types.TtnMapperGatewayMoved) {
 	db.Where(&types.Antenna{NetworkId: movedGateway.NetworkId, GatewayId: movedGateway.GatewayId}).Find(&antennas)
 
 	for _, antenna := range antennas {
+		antennaStart := time.Now()
+
 		log.Print("AntennaID ", antenna.ID)
 
 		// Get a list of grid cells to delete
@@ -66,6 +78,7 @@ func aggregateMovedGateway(movedGateway types.TtnMapperGatewayMoved) {
 
 		// Remove from local cache
 		for _, gridCell := range gridCells {
+			deletedGridCells.Inc()
 			gridCellIndexer := types.GridCellIndexer{AntennaId: gridCell.AntennaID, X: gridCell.X, Y: gridCell.Y}
 			gridCellDbCache.Delete(gridCellIndexer)
 		}
@@ -77,8 +90,13 @@ func aggregateMovedGateway(movedGateway types.TtnMapperGatewayMoved) {
 		db.Where("antenna_id = ? AND time > ?", antenna.ID, movedTime).Find(&packets)
 
 		for _, packet := range packets {
+			oldDataProcessed.Inc()
 			incrementBucket(antenna.ID, packet.Latitude, packet.Longitude, packet.Time, packet.Rssi, packet.Snr)
 		}
+
+		// Prometheus stats
+		antennaElapsed := time.Since(antennaStart)
+		processMovedDuration.Observe(float64(antennaElapsed.Nanoseconds()) / 1000.0 / 1000.0) //nanoseconds to milliseconds
 	}
 
 }
@@ -156,4 +174,6 @@ func incrementBucket(antennaId uint, latitude float64, longitude float64, time t
 
 	// Save to cache
 	gridCellDbCache.Store(gridCellIndexer, gridCellDb)
+
+	updatedGridCells.Inc()
 }
