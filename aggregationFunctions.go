@@ -102,7 +102,6 @@ func incrementBucket(antennaId uint, latitude float64, longitude float64, time t
 	if ok {
 		gridCellDb = i.(types.GridCell)
 		log.Println("Found grid cell in cache")
-		log.Println(gridCellDb)
 	} else {
 		gridCellDb.AntennaID = antennaId
 		gridCellDb.X = tile.X
