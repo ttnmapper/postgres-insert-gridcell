@@ -40,7 +40,7 @@ func aggregateNewData(message types.TtnMapperUplinkMessage) {
 		nanos := message.Time % 1000000000
 		entryTime := time.Unix(seconds, nanos)
 
-		log.Println("AntennaID ", antennaID)
+		log.Print("AntennaID ", antennaID)
 		incrementBucket(antennaID, message.Latitude, message.Longitude, entryTime, gateway.Rssi, gateway.Snr)
 	}
 }
@@ -51,14 +51,14 @@ func aggregateMovedGateway(movedGateway types.TtnMapperGatewayMoved) {
 	nanos := movedGateway.Time % 1000000000
 	movedTime := time.Unix(seconds, nanos)
 
-	log.Println("Gateway ", movedGateway.GatewayId, "moved at ", movedTime)
+	log.Print("Gateway ", movedGateway.GatewayId, "moved at ", movedTime)
 
 	// Find the antenna IDs for the moved gateway
 	var antennas []types.Antenna
 	db.Where(&types.Antenna{NetworkId: movedGateway.NetworkId, GatewayId: movedGateway.GatewayId}).Find(&antennas)
 
 	for _, antenna := range antennas {
-		log.Println("AntennaID ", antenna.ID)
+		log.Print("AntennaID ", antenna.ID)
 
 		// Get a list of grid cells to delete
 		var gridCells []types.GridCell
@@ -101,17 +101,17 @@ func incrementBucket(antennaId uint, latitude float64, longitude float64, time t
 	i, ok := gridCellDbCache.Load(gridCellIndexer)
 	if ok {
 		gridCellDb = i.(types.GridCell)
-		log.Println("Found grid cell in cache")
+		log.Print("Found grid cell in cache")
 	} else {
 		gridCellDb.AntennaID = antennaId
 		gridCellDb.X = tile.X
 		gridCellDb.Y = tile.Y
 		err := db.FirstOrCreate(&gridCellDb, &gridCellDb).Error
 		if err != nil {
-			log.Println(antennaId, latitude, longitude, tile.X, tile.Y)
+			log.Print(antennaId, latitude, longitude, tile.X, tile.Y)
 			failOnError(err, "Failed to find db entry for grid cell")
 		}
-		log.Println("Found grid cell in db")
+		log.Print("Found grid cell in db")
 	}
 
 	signal := rssi
