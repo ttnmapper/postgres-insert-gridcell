@@ -189,7 +189,7 @@ AND gateway_id = ?`
 
 		log.Println(antenna.GatewayId, movedTime)
 
-		//ReprocessAntenna(antenna, movedTime)
+		ReprocessAntenna(antenna, movedTime)
 	}
 	rows.Close()
 }
