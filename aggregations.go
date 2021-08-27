@@ -148,7 +148,7 @@ func getGridCell(antennaId uint, latitude float64, longitude float64) (types.Gri
 	i, ok := gridCellDbCache.Load(gridCellIndexer)
 	if ok {
 		gridCellDb = i.(types.GridCell)
-		log.Print("Found grid cell in cache")
+		//log.Print("Found grid cell in cache")
 	} else {
 		gridCellDb.AntennaID = antennaId
 		gridCellDb.X = tile.X
@@ -158,7 +158,7 @@ func getGridCell(antennaId uint, latitude float64, longitude float64) (types.Gri
 			log.Print(antennaId, latitude, longitude, tile.X, tile.Y)
 			failOnError(err, "Failed to find db entry for grid cell")
 		}
-		log.Print("Found grid cell in db")
+		//log.Print("Found grid cell in db")
 	}
 	return gridCellDb, nil
 }
@@ -177,7 +177,7 @@ func StoreGridCellInTempCache(tempCache *sync.Map, gridCell types.GridCell) {
 
 func StoreGridCellInDb(gridCell types.GridCell) {
 	// Save to db
-	log.Println("Storing in DB")
+	//log.Println("Storing in DB")
 	//log.Println(gridCellDb)
 	db.Save(&gridCell)
 }

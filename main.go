@@ -96,6 +96,7 @@ func main() {
 
 	reprocess := flag.Bool("reprocess", false, "a bool")
 	flag.Parse()
+	reprocess_gateways := flag.Args()
 
 	err := gonfig.GetConf("conf.json", &myConfiguration)
 	if err != nil {
@@ -143,7 +144,11 @@ func main() {
 	if *reprocess {
 		log.Println("Reprocessing")
 
-		ReprocessSpiess()
+		if len(reprocess_gateways) > 0 {
+			ReprocessGateways(reprocess_gateways)
+		} else {
+			ReprocessAll()
+		}
 
 	} else {
 		// Start amqp listener threads
@@ -160,6 +165,32 @@ func main() {
 		<-forever
 	}
 
+}
+
+func ReprocessAll() {
+	log.Println("All gateways")
+
+	// Get all records
+	var gateways []types.Gateway
+	db.Find(&gateways)
+
+	for i, gateway := range gateways {
+		log.Println(i, "/", len(gateways), " ", gateway.NetworkId, " - ", gateway.GatewayId)
+		ReprocessSingleGateway(gateway)
+	}
+}
+
+func ReprocessGateways(gateways []string) {
+	for _, gatewayId := range gateways {
+		// The same gateway_id can exist in multiple networks, so iterate them all
+		var gateways []types.Gateway
+		db.Where("gateway_id = ?", gatewayId).Find(&gateways)
+
+		for i, gateway := range gateways {
+			log.Println(i, "/", len(gateways), " ", gateway.NetworkId, " - ", gateway.GatewayId)
+			ReprocessSingleGateway(gateway)
+		}
+	}
 }
 
 func ReprocessSpiess() {
@@ -192,4 +223,26 @@ AND gateway_id = ?`
 		ReprocessAntenna(antenna, movedTime)
 	}
 	rows.Close()
+}
+
+func ReprocessSingleGateway(gateway types.Gateway) {
+	/*
+		Find all antennas with same network and gateway id
+	*/
+	var antennas []types.Antenna
+	db.Where("network_id = ? and gateway_id = ?", gateway.NetworkId, gateway.GatewayId).Find(&antennas)
+
+	for _, antenna := range antennas {
+		var movedTime time.Time
+		lastMovedQuery := `
+SELECT max(installed_at) FROM gateway_locations
+WHERE network_id = ?
+AND gateway_id = ?`
+		timeRow := db.Raw(lastMovedQuery, antenna.NetworkId, antenna.GatewayId).Row()
+		timeRow.Scan(&movedTime)
+
+		log.Println(movedTime)
+
+		ReprocessAntenna(antenna, movedTime)
+	}
 }
