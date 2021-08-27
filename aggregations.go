@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"github.com/j4/gosm"
 	"log"
 	"sync"
@@ -29,11 +30,14 @@ func aggregateNewData(message types.TtnMapperUplinkMessage) {
 		antennaIndexer := types.AntennaIndexer{NetworkId: gateway.NetworkId, GatewayId: gateway.GatewayId, AntennaIndex: gateway.AntennaIndex}
 		i, ok := antennaDbCache.Load(antennaIndexer)
 		if ok {
+			log.Println("Antenna from cache", antennaIndexer)
 			antennaID = i.(uint)
 		} else {
 			antennaDb := types.Antenna{NetworkId: gateway.NetworkId, GatewayId: gateway.GatewayId, AntennaIndex: gateway.AntennaIndex}
+			log.Println("Antenna from db", antennaDb)
 			err := db.FirstOrCreate(&antennaDb, &antennaDb).Error
 			if err != nil {
+				log.Println(err.Error())
 				continue
 			}
 			antennaID = antennaDb.ID
@@ -45,7 +49,13 @@ func aggregateNewData(message types.TtnMapperUplinkMessage) {
 		entryTime := time.Unix(seconds, nanos)
 
 		log.Print("AntennaID ", antennaID)
-		incrementBucket(antennaID, message.Latitude, message.Longitude, entryTime, gateway.Rssi, gateway.Snr)
+		gridCell, err := getGridCell(antennaID, message.Latitude, message.Longitude)
+		if err != nil {
+			continue
+		}
+		incrementBucket(&gridCell, entryTime, gateway.Rssi, gateway.Snr)
+		StoreGridCellInCache(gridCell)
+		StoreGridCellInDb(gridCell)
 
 		// Prometheus stats
 		gatewayElapsed := time.Since(gatewayStart)
@@ -68,46 +78,65 @@ func aggregateMovedGateway(movedGateway types.TtnMapperGatewayMoved) {
 	db.Where(&types.Antenna{NetworkId: movedGateway.NetworkId, GatewayId: movedGateway.GatewayId}).Find(&antennas)
 
 	for _, antenna := range antennas {
-		antennaStart := time.Now()
-
-		log.Print("AntennaID ", antenna.ID)
-
-		// Get a list of grid cells to delete
-		var gridCells []types.GridCell
-		db.Where("antenna_id = ?", antenna.ID).Find(&gridCells)
-
-		// Remove from local cache
-		for _, gridCell := range gridCells {
-			deletedGridCells.Inc()
-			gridCellIndexer := types.GridCellIndexer{AntennaId: gridCell.AntennaID, X: gridCell.X, Y: gridCell.Y}
-			gridCellDbCache.Delete(gridCellIndexer)
-		}
-		// Then remove from sql
-		db.Where(&types.GridCell{AntennaID: antenna.ID}).Delete(&types.GridCell{})
-
-		// Get all existing packets since gateway last moved
-		var packets []types.Packet
-		db.Where("antenna_id = ? AND time > ?", antenna.ID, movedTime).Find(&packets)
-
-		for _, packet := range packets {
-			oldDataProcessed.Inc()
-			incrementBucket(antenna.ID, packet.Latitude, packet.Longitude, packet.Time, packet.Rssi, packet.Snr)
-		}
-
-		// Prometheus stats
-		antennaElapsed := time.Since(antennaStart)
-		processMovedDuration.Observe(float64(antennaElapsed.Nanoseconds()) / 1000.0 / 1000.0) //nanoseconds to milliseconds
+		ReprocessAntenna(antenna, movedTime)
 	}
 
 }
 
-func incrementBucket(antennaId uint, latitude float64, longitude float64, time time.Time, rssi float32, snr float32) {
+func ReprocessAntenna(antenna types.Antenna, installedAtLocation time.Time) {
+	antennaStart := time.Now()
 
+	log.Print("AntennaID ", antenna.ID)
+
+	// Get a list of grid cells to delete
+	var gridCells []types.GridCell
+	db.Where("antenna_id = ?", antenna.ID).Find(&gridCells)
+
+	// Remove from local cache
+	for _, gridCell := range gridCells {
+		deletedGridCells.Inc()
+		gridCellIndexer := types.GridCellIndexer{AntennaId: gridCell.AntennaID, X: gridCell.X, Y: gridCell.Y}
+		gridCellDbCache.Delete(gridCellIndexer)
+	}
+	// Then remove from sql
+	db.Where(&types.GridCell{AntennaID: antenna.ID}).Delete(&types.GridCell{})
+
+	// Get all existing packets since gateway last moved
+	var packets []types.Packet
+	db.Where("antenna_id = ? AND time > ?", antenna.ID, installedAtLocation).Find(&packets)
+
+	gatewayGridCells := sync.Map{}
+	for _, packet := range packets {
+		oldDataProcessed.Inc()
+		gridCell, err := getGridCell(antenna.ID, packet.Latitude, packet.Longitude)
+		if err != nil {
+			continue
+		}
+		incrementBucket(&gridCell, packet.Time, packet.Rssi, packet.Snr)
+		StoreGridCellInCache(gridCell)
+		StoreGridCellInTempCache(&gatewayGridCells, gridCell)
+	}
+
+	gatewayGridCells.Range(func(key, value interface{}) bool {
+		gridCell, ok := value.(types.GridCell)
+		if !ok {
+			return true
+		}
+		StoreGridCellInDb(gridCell)
+		return true
+	})
+
+	// Prometheus stats
+	antennaElapsed := time.Since(antennaStart)
+	processMovedDuration.Observe(float64(antennaElapsed.Nanoseconds()) / 1000.0 / 1000.0) //nanoseconds to milliseconds
+}
+
+func getGridCell(antennaId uint, latitude float64, longitude float64) (types.GridCell, error) {
 	// https://blog.jochentopf.com/2013-02-04-antarctica-in-openstreetmap.html
 	// The Mercator projection generally used in online maps only covers the area between about 85.0511 degrees South and 85.0511 degrees North.
 	if latitude < -85 || latitude > 85 {
 		// We get a tile index that is invalid if we try handling -90,-180
-		return
+		return types.GridCell{}, errors.New("coordinates out of range")
 	}
 
 	tile := gosm.NewTileWithLatLong(latitude, longitude, 19)
@@ -131,49 +160,63 @@ func incrementBucket(antennaId uint, latitude float64, longitude float64, time t
 		}
 		log.Print("Found grid cell in db")
 	}
+	return gridCellDb, nil
+}
 
+func StoreGridCellInCache(gridCell types.GridCell) {
+	// Save to cache
+	gridCellIndexer := types.GridCellIndexer{AntennaId: gridCell.AntennaID, X: gridCell.X, Y: gridCell.Y}
+	gridCellDbCache.Store(gridCellIndexer, gridCell)
+}
+
+func StoreGridCellInTempCache(tempCache *sync.Map, gridCell types.GridCell) {
+	// Save to cache
+	gridCellIndexer := types.GridCellIndexer{AntennaId: gridCell.AntennaID, X: gridCell.X, Y: gridCell.Y}
+	tempCache.Store(gridCellIndexer, gridCell)
+}
+
+func StoreGridCellInDb(gridCell types.GridCell) {
+	// Save to db
+	log.Println("Storing in DB")
+	//log.Println(gridCellDb)
+	db.Save(&gridCell)
+}
+
+func incrementBucket(gridCell *types.GridCell, time time.Time, rssi float32, snr float32) {
 	signal := rssi
 	if snr < 0 {
 		signal += snr
 	}
 
 	if signal > -95 {
-		gridCellDb.BucketHigh++
+		gridCell.BucketHigh++
 	} else if signal > -100 {
-		gridCellDb.Bucket100++
+		gridCell.Bucket100++
 	} else if signal > -105 {
-		gridCellDb.Bucket105++
+		gridCell.Bucket105++
 	} else if signal > -110 {
-		gridCellDb.Bucket110++
+		gridCell.Bucket110++
 	} else if signal > -115 {
-		gridCellDb.Bucket115++
+		gridCell.Bucket115++
 	} else if signal > -120 {
-		gridCellDb.Bucket120++
+		gridCell.Bucket120++
 	} else if signal > -125 {
-		gridCellDb.Bucket125++
+		gridCell.Bucket125++
 	} else if signal > -130 {
-		gridCellDb.Bucket130++
+		gridCell.Bucket130++
 	} else if signal > -135 {
-		gridCellDb.Bucket135++
+		gridCell.Bucket135++
 	} else if signal > -140 {
-		gridCellDb.Bucket140++
+		gridCell.Bucket140++
 	} else if signal > -145 {
-		gridCellDb.Bucket145++
+		gridCell.Bucket145++
 	} else {
-		gridCellDb.BucketLow++
+		gridCell.BucketLow++
 	}
 
-	if time.After(gridCellDb.LastUpdated) {
-		gridCellDb.LastUpdated = time
+	if time.After(gridCell.LastUpdated) {
+		gridCell.LastUpdated = time
 	}
-
-	// Save to db
-	log.Println("Storing in DB")
-	//log.Println(gridCellDb)
-	db.Save(&gridCellDb)
-
-	// Save to cache
-	gridCellDbCache.Store(gridCellIndexer, gridCellDb)
 
 	updatedGridCells.Inc()
 }

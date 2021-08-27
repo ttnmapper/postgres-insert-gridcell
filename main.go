@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"github.com/jinzhu/gorm"
 	_ "github.com/jinzhu/gorm/dialects/postgres"
 	"github.com/prometheus/client_golang/prometheus"
@@ -9,6 +10,7 @@ import (
 	"github.com/tkanos/gonfig"
 	"log"
 	"net/http"
+	"time"
 	"ttnmapper-postgres-insert-gridcell/types"
 )
 
@@ -92,6 +94,9 @@ var (
 
 func main() {
 
+	reprocess := flag.Bool("reprocess", false, "a bool")
+	flag.Parse()
+
 	err := gonfig.GetConf("conf.json", &myConfiguration)
 	if err != nil {
 		log.Println(err)
@@ -134,17 +139,57 @@ func main() {
 		&types.GridCell{},
 	)
 
-	// Start amqp listener threads
-	log.Println("Starting AMQP thread")
-	subscribeToRabbitNewData()
-	subscribeToRabbitMovedGateway()
+	// Should we reprocess or listen for live data?
+	if *reprocess {
+		log.Println("Reprocessing")
 
-	// Starting processing threads
-	processNewData()
-	processMovedGateway()
+		ReprocessSpiess()
 
-	log.Printf("Init Complete")
-	forever := make(chan bool)
-	<-forever
+	} else {
+		// Start amqp listener threads
+		log.Println("Starting AMQP thread")
+		go subscribeToRabbitNewData()
+		go subscribeToRabbitMovedGateway()
 
+		// Starting processing threads
+		go processNewData()
+		go processMovedGateway()
+
+		log.Printf("Init Complete")
+		forever := make(chan bool)
+		<-forever
+	}
+
+}
+
+func ReprocessSpiess() {
+	// Get all gateways heard by device ID
+	query := `
+SELECT DISTINCT(antenna_id) FROM packets p
+JOIN devices d on d.id = p.device_id
+WHERE d.dev_id = 't-beam-tracker'
+AND d.app_id = 'ttn-tracker-sensorsiot'`
+
+	rows, _ := db.Raw(query).Rows()
+	for rows.Next() {
+		var antennaId uint
+		rows.Scan(&antennaId)
+
+		// Find the antenna IDs for the moved gateway
+		var antenna types.Antenna
+		db.First(&antenna, antennaId)
+
+		var movedTime time.Time
+		lastMovedQuery := `
+SELECT max(installed_at) FROM gateway_locations
+WHERE network_id = ?
+AND gateway_id = ?`
+		timeRow := db.Raw(lastMovedQuery, antenna.NetworkId, antenna.GatewayId).Row()
+		timeRow.Scan(&movedTime)
+
+		log.Println(antenna.GatewayId, movedTime)
+
+		//ReprocessAntenna(antenna, movedTime)
+	}
+	rows.Close()
 }
