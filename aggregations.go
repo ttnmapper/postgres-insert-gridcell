@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/j4/gosm"
 	"log"
+	"strings"
 	"sync"
 	"time"
 	"ttnmapper-postgres-insert-gridcell/types"
@@ -125,28 +126,24 @@ func ReprocessAntenna(antenna types.Antenna, installedAtLocation time.Time) {
 	var packets []types.Packet
 	db.Where("antenna_id = ? AND time > ? AND experiment_id IS NULL", antenna.ID, installedAtLocation).Find(&packets)
 
-	gatewayGridCells := sync.Map{}
+	gatewayGridCells := map[types.GridCellIndexer]types.GridCell{}
 	for i, packet := range packets {
 		fmt.Printf("\rPacket %d/%d   ", i+1, len(packets))
 		oldDataProcessed.Inc()
-		gridCell, err := getGridCell(antenna.ID, packet.Latitude, packet.Longitude)
+		gridCell, err := getGridCellNotDb(antenna.ID, packet.Latitude, packet.Longitude) // Do not create now as we will do a batch insert later
 		if err != nil {
 			continue
 		}
 		incrementBucket(&gridCell, packet.Time, packet.Rssi, packet.Snr)
-		StoreGridCellInCache(gridCell)
-		StoreGridCellInTempCache(&gatewayGridCells, gridCell)
+		StoreGridCellInCache(gridCell) // so that we don't read it again from the database
+
+		// Also store in a map of gridcells we will write to the database later
+		gridCellIndexer := types.GridCellIndexer{AntennaId: gridCell.AntennaID, X: gridCell.X, Y: gridCell.Y}
+		gatewayGridCells[gridCellIndexer] = gridCell
 	}
 	fmt.Println()
 
-	gatewayGridCells.Range(func(key, value interface{}) bool {
-		gridCell, ok := value.(types.GridCell)
-		if !ok {
-			return true
-		}
-		StoreGridCellInDb(gridCell)
-		return true
-	})
+	StoreGridCellsInDb(gatewayGridCells)
 
 	// Prometheus stats
 	antennaElapsed := time.Since(antennaStart)
@@ -189,23 +186,92 @@ func getGridCell(antennaId uint, latitude float64, longitude float64) (types.Gri
 	return gridCellDb, nil
 }
 
+func getGridCellNotDb(antennaId uint, latitude float64, longitude float64) (types.GridCell, error) {
+	// https://blog.jochentopf.com/2013-02-04-antarctica-in-openstreetmap.html
+	// The Mercator projection generally used in online maps only covers the area between about 85.0511 degrees South and 85.0511 degrees North.
+	if latitude < -85 || latitude > 85 {
+		// We get a tile index that is invalid if we try handling -90,-180
+		return types.GridCell{}, errors.New("coordinates out of range")
+	}
+	if latitude == 0 && longitude == 0 {
+		// We get a tile index that is invalid if we try handling -90,-180
+		return types.GridCell{}, errors.New("null island")
+	}
+
+	tile := gosm.NewTileWithLatLong(latitude, longitude, 19)
+
+	gridCell := types.GridCell{}
+
+	// Try and find in cache
+	gridCellIndexer := types.GridCellIndexer{AntennaId: antennaId, X: tile.X, Y: tile.Y}
+	i, ok := gridCellDbCache.Load(gridCellIndexer)
+	if ok {
+		gridCell = i.(types.GridCell)
+		//log.Print("Found grid cell in cache")
+	} else {
+		gridCell.AntennaID = antennaId
+		gridCell.X = tile.X
+		gridCell.Y = tile.Y
+	}
+	return gridCell, nil
+}
+
 func StoreGridCellInCache(gridCell types.GridCell) {
 	// Save to cache
 	gridCellIndexer := types.GridCellIndexer{AntennaId: gridCell.AntennaID, X: gridCell.X, Y: gridCell.Y}
 	gridCellDbCache.Store(gridCellIndexer, gridCell)
 }
 
-func StoreGridCellInTempCache(tempCache *sync.Map, gridCell types.GridCell) {
-	// Save to cache
-	gridCellIndexer := types.GridCellIndexer{AntennaId: gridCell.AntennaID, X: gridCell.X, Y: gridCell.Y}
-	tempCache.Store(gridCellIndexer, gridCell)
-}
+//func StoreGridCellInTempCache(tempCache *sync.Map, gridCell types.GridCell) {
+//	// Save to cache
+//	gridCellIndexer := types.GridCellIndexer{AntennaId: gridCell.AntennaID, X: gridCell.X, Y: gridCell.Y}
+//	tempCache.Store(gridCellIndexer, gridCell)
+//}
 
 func StoreGridCellInDb(gridCell types.GridCell) {
 	// Save to db
 	//log.Println("Storing in DB")
 	//log.Println(gridCellDb)
 	db.Save(&gridCell)
+}
+
+func StoreGridCellsInDb(gridCells map[types.GridCellIndexer]types.GridCell) error {
+	tx := db.Begin()
+	var valueStrings []string
+	var valueArgs []interface{}
+	fields := "antenna_id,x,y,last_updated,bucket_high,bucket100,bucket105,bucket110,bucket115,bucket120,bucket125,bucket130,bucket135,bucket140,bucket145,bucket_low,bucket_no_signal"
+
+	for _, gridCell := range gridCells {
+		valueStrings = append(valueStrings, "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+		valueArgs = append(valueArgs, gridCell.AntennaID)
+		valueArgs = append(valueArgs, gridCell.X)
+		valueArgs = append(valueArgs, gridCell.Y)
+		valueArgs = append(valueArgs, gridCell.LastUpdated)
+		valueArgs = append(valueArgs, gridCell.BucketHigh)
+		valueArgs = append(valueArgs, gridCell.Bucket100)
+		valueArgs = append(valueArgs, gridCell.Bucket105)
+		valueArgs = append(valueArgs, gridCell.Bucket110)
+		valueArgs = append(valueArgs, gridCell.Bucket115)
+		valueArgs = append(valueArgs, gridCell.Bucket120)
+		valueArgs = append(valueArgs, gridCell.Bucket125)
+		valueArgs = append(valueArgs, gridCell.Bucket130)
+		valueArgs = append(valueArgs, gridCell.Bucket135)
+		valueArgs = append(valueArgs, gridCell.Bucket140)
+		valueArgs = append(valueArgs, gridCell.Bucket145)
+		valueArgs = append(valueArgs, gridCell.BucketLow)
+		valueArgs = append(valueArgs, gridCell.BucketNoSignal)
+	}
+
+	// We can do an insert here rather than an update, because the existing grid cells have been deleted during reprocessing before we get here
+	stmt := fmt.Sprintf("INSERT INTO grid_cells (%s) VALUES %s", fields, strings.Join(valueStrings, ","))
+	err := tx.Exec(stmt, valueArgs...).Error
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	err = tx.Commit().Error
+	//tx.Rollback()
+	return err
 }
 
 func incrementBucket(gridCell *types.GridCell, time time.Time, rssi float32, snr float32) {
