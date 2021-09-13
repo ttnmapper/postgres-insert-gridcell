@@ -126,6 +126,11 @@ func ReprocessAntenna(antenna types.Antenna, installedAtLocation time.Time) {
 	var packets []types.Packet
 	db.Where("antenna_id = ? AND time > ? AND experiment_id IS NULL", antenna.ID, installedAtLocation).Find(&packets)
 
+	if len(packets) == 0 {
+		log.Println("No packets")
+		return
+	}
+
 	gatewayGridCells := map[types.GridCellIndexer]types.GridCell{}
 	for i, packet := range packets {
 		fmt.Printf("\rPacket %d/%d   ", i+1, len(packets))
@@ -236,6 +241,11 @@ func StoreGridCellInDb(gridCell types.GridCell) {
 }
 
 func StoreGridCellsInDb(gridCells map[types.GridCellIndexer]types.GridCell) error {
+	if len(gridCells) == 0 {
+		log.Println("No grid cells to insert")
+		return nil
+	}
+
 	tx := db.Begin()
 	var valueStrings []string
 	var valueArgs []interface{}
