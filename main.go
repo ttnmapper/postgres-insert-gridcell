@@ -193,38 +193,6 @@ func ReprocessGateways(gateways []string) {
 	}
 }
 
-func ReprocessSpiess() {
-	// Get all gateways heard by device ID
-	query := `
-SELECT DISTINCT(antenna_id) FROM packets p
-JOIN devices d on d.id = p.device_id
-WHERE d.dev_id = 't-beam-tracker'
-AND d.app_id = 'ttn-tracker-sensorsiot'`
-
-	rows, _ := db.Raw(query).Rows()
-	for rows.Next() {
-		var antennaId uint
-		rows.Scan(&antennaId)
-
-		// Find the antenna IDs for the moved gateway
-		var antenna types.Antenna
-		db.First(&antenna, antennaId)
-
-		var movedTime time.Time
-		lastMovedQuery := `
-SELECT max(installed_at) FROM gateway_locations
-WHERE network_id = ?
-AND gateway_id = ?`
-		timeRow := db.Raw(lastMovedQuery, antenna.NetworkId, antenna.GatewayId).Row()
-		timeRow.Scan(&movedTime)
-
-		log.Println(antenna.GatewayId, movedTime)
-
-		ReprocessAntenna(antenna, movedTime)
-	}
-	rows.Close()
-}
-
 func ReprocessSingleGateway(gateway types.Gateway) {
 	/*
 		Find all antennas with same network and gateway id

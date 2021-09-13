@@ -40,18 +40,17 @@ func IniDb() {
 func TestAggregateMovedGateway(t *testing.T) {
 	IniDb()
 
+	//movedGateway := types.TtnMapperGatewayMoved{
+	//	NetworkId:    "NS_TTS_V3://ttn@000013",
+	//	GatewayId:    "eui-000080029c09dd87",
+	//}
 	movedGateway := types.TtnMapperGatewayMoved{
-		NetworkId:    "NS_TTS_V3://ttn@000013",
-		GatewayId:    "eui-000080029c09dd87",
-		Time:         0,
-		LatitudeOld:  0,
-		LongitudeOld: 0,
-		AltitudeOld:  0,
-		LatitudeNew:  0,
-		LongitudeNew: 0,
-		AltitudeNew:  0,
+		NetworkId: "thethingsnetwork.org",
+		GatewayId: "eui-58a0cbfffe8023e7",
 	}
 	aggregateMovedGateway(movedGateway)
+	//gateway := types.Gateway{NetworkId: "thethingsnetwork.org", GatewayId: "eui-58a0cbfffe8023e7"}
+	//ReprocessSingleGateway(gateway)
 }
 
 func TestReprocessSpiess(t *testing.T) {
@@ -86,5 +85,26 @@ AND gateway_id = ?`
 		break
 	}
 	rows.Close()
+	db.Close()
+}
+
+func TestReprocessHelium(t *testing.T) {
+	IniDb()
+
+	var antennas []types.Antenna
+	db.Where("network_id = ?", "NS_HELIUM://000024").Find(&antennas)
+
+	for _, antenna := range antennas {
+		var movedTime time.Time
+		lastMovedQuery := `
+SELECT max(installed_at) FROM gateway_locations
+WHERE network_id = ?
+AND gateway_id = ?`
+		timeRow := db.Raw(lastMovedQuery, antenna.NetworkId, antenna.GatewayId).Row()
+		timeRow.Scan(&movedTime)
+
+		log.Println(antenna.GatewayId, movedTime)
+		ReprocessAntenna(antenna, movedTime)
+	}
 	db.Close()
 }

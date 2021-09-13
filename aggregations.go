@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"github.com/j4/gosm"
 	"log"
 	"sync"
@@ -19,6 +20,13 @@ var (
 func aggregateNewData(message types.TtnMapperUplinkMessage) {
 
 	processedLive.Inc()
+
+	if message.Experiment != "" {
+		return
+	}
+	if message.Latitude == 0 && message.Longitude == 0 {
+		return
+	}
 
 	// Iterate gateways. We store it flat in the database
 	for _, gateway := range message.Gateways {
@@ -67,15 +75,25 @@ func aggregateMovedGateway(movedGateway types.TtnMapperGatewayMoved) {
 
 	processedMoved.Inc()
 
-	seconds := movedGateway.Time / 1000000000
-	nanos := movedGateway.Time % 1000000000
-	movedTime := time.Unix(seconds, nanos)
+	//seconds := movedGateway.Time / 1000000000
+	//nanos := movedGateway.Time % 1000000000
+	//movedTime := time.Unix(seconds, nanos)
 
+	var movedTime time.Time
+	lastMovedQuery := `
+SELECT max(installed_at) FROM gateway_locations
+WHERE gateway_id = ?`
+	timeRow := db.Raw(lastMovedQuery, movedGateway.GatewayId).Row()
+	timeRow.Scan(&movedTime)
 	log.Print("Gateway ", movedGateway.GatewayId, "moved at ", movedTime)
 
 	// Find the antenna IDs for the moved gateway
 	var antennas []types.Antenna
-	db.Where(&types.Antenna{NetworkId: movedGateway.NetworkId, GatewayId: movedGateway.GatewayId}).Find(&antennas)
+	if movedGateway.NetworkId == "thethingsnetwork.org" {
+		db.Where(&types.Antenna{GatewayId: movedGateway.GatewayId}).Find(&antennas)
+	} else {
+		db.Where(&types.Antenna{NetworkId: movedGateway.NetworkId, GatewayId: movedGateway.GatewayId}).Find(&antennas)
+	}
 
 	for _, antenna := range antennas {
 		ReprocessAntenna(antenna, movedTime)
@@ -99,14 +117,17 @@ func ReprocessAntenna(antenna types.Antenna, installedAtLocation time.Time) {
 		gridCellDbCache.Delete(gridCellIndexer)
 	}
 	// Then remove from sql
+	log.Println("Deleting old grid cells")
 	db.Where(&types.GridCell{AntennaID: antenna.ID}).Delete(&types.GridCell{})
 
 	// Get all existing packets since gateway last moved
+	log.Println("Getting all packets")
 	var packets []types.Packet
-	db.Where("antenna_id = ? AND time > ?", antenna.ID, installedAtLocation).Find(&packets)
+	db.Where("antenna_id = ? AND time > ? AND experiment_id IS NULL", antenna.ID, installedAtLocation).Find(&packets)
 
 	gatewayGridCells := sync.Map{}
-	for _, packet := range packets {
+	for i, packet := range packets {
+		fmt.Printf("\rPacket %d/%d   ", i+1, len(packets))
 		oldDataProcessed.Inc()
 		gridCell, err := getGridCell(antenna.ID, packet.Latitude, packet.Longitude)
 		if err != nil {
@@ -116,6 +137,7 @@ func ReprocessAntenna(antenna types.Antenna, installedAtLocation time.Time) {
 		StoreGridCellInCache(gridCell)
 		StoreGridCellInTempCache(&gatewayGridCells, gridCell)
 	}
+	fmt.Println()
 
 	gatewayGridCells.Range(func(key, value interface{}) bool {
 		gridCell, ok := value.(types.GridCell)
@@ -137,6 +159,10 @@ func getGridCell(antennaId uint, latitude float64, longitude float64) (types.Gri
 	if latitude < -85 || latitude > 85 {
 		// We get a tile index that is invalid if we try handling -90,-180
 		return types.GridCell{}, errors.New("coordinates out of range")
+	}
+	if latitude == 0 && longitude == 0 {
+		// We get a tile index that is invalid if we try handling -90,-180
+		return types.GridCell{}, errors.New("null island")
 	}
 
 	tile := gosm.NewTileWithLatLong(latitude, longitude, 19)
