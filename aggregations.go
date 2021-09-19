@@ -117,24 +117,29 @@ func ReprocessAntenna(antenna types.Antenna, installedAtLocation time.Time) {
 		gridCellIndexer := types.GridCellIndexer{AntennaId: gridCell.AntennaID, X: gridCell.X, Y: gridCell.Y}
 		gridCellDbCache.Delete(gridCellIndexer)
 	}
-	// Then remove from sql
-	log.Println("Deleting old grid cells")
-	db.Where(&types.GridCell{AntennaID: antenna.ID}).Delete(&types.GridCell{})
-
-	// Get all existing packets since gateway last moved
-	log.Println("Getting all packets")
-	var packets []types.Packet
-	db.Where("antenna_id = ? AND time > ? AND experiment_id IS NULL", antenna.ID, installedAtLocation).Find(&packets)
-
-	if len(packets) == 0 {
-		log.Println("No packets")
-		return
-	}
 
 	gatewayGridCells := map[types.GridCellIndexer]types.GridCell{}
-	for i, packet := range packets {
-		fmt.Printf("\rPacket %d/%d   ", i+1, len(packets))
+
+	// Get all existing packets since gateway last moved
+	//db.Where("antenna_id = ? AND time > ? AND experiment_id IS NULL", antenna.ID, installedAtLocation).Find(&packets) // uses too much memory
+	rows, err := db.Model(&types.Packet{}).Where("antenna_id = ? AND time > ? AND experiment_id IS NULL", antenna.ID, installedAtLocation).Rows() // server side cursor
+	if err != nil {
+		log.Fatalf(err.Error())
+	}
+	defer rows.Close()
+	i := 0
+	for rows.Next() {
+		i++
 		oldDataProcessed.Inc()
+		fmt.Printf("\rPacket %d   ", i)
+
+		var packet types.Packet
+		err := db.ScanRows(rows, &packet)
+		if err != nil {
+			log.Println(err.Error())
+			continue
+		}
+
 		gridCell, err := getGridCellNotDb(antenna.ID, packet.Latitude, packet.Longitude) // Do not create now as we will do a batch insert later
 		if err != nil {
 			continue
@@ -146,9 +151,20 @@ func ReprocessAntenna(antenna types.Antenna, installedAtLocation time.Time) {
 		gridCellIndexer := types.GridCellIndexer{AntennaId: gridCell.AntennaID, X: gridCell.X, Y: gridCell.Y}
 		gatewayGridCells[gridCellIndexer] = gridCell
 	}
+
+	if len(gatewayGridCells) == 0 {
+		log.Println("No packets")
+		return
+	}
 	fmt.Println()
 
-	StoreGridCellsInDb(gatewayGridCells)
+	// Delete old cells
+	db.Where(&types.GridCell{AntennaID: antenna.ID}).Delete(&types.GridCell{})
+	// Then add new ones
+	err = StoreGridCellsInDb(gatewayGridCells)
+	if err != nil {
+		log.Fatalf(err.Error())
+	}
 
 	// Prometheus stats
 	antennaElapsed := time.Since(antennaStart)
@@ -249,7 +265,8 @@ func StoreGridCellsInDb(gridCells map[types.GridCellIndexer]types.GridCell) erro
 	tx := db.Begin()
 	var valueStrings []string
 	var valueArgs []interface{}
-	fields := "antenna_id,x,y,last_updated,bucket_high,bucket100,bucket105,bucket110,bucket115,bucket120,bucket125,bucket130,bucket135,bucket140,bucket145,bucket_low,bucket_no_signal"
+	fields := "antenna_id,x,y,last_updated,bucket_high,bucket100,bucket105,bucket110,bucket115,bucket120,bucket125," +
+		"bucket130,bucket135,bucket140,bucket145,bucket_low,bucket_no_signal"
 
 	for _, gridCell := range gridCells {
 		valueStrings = append(valueStrings, "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
@@ -270,6 +287,25 @@ func StoreGridCellsInDb(gridCells map[types.GridCellIndexer]types.GridCell) erro
 		valueArgs = append(valueArgs, gridCell.Bucket145)
 		valueArgs = append(valueArgs, gridCell.BucketLow)
 		valueArgs = append(valueArgs, gridCell.BucketNoSignal)
+
+		// Insert in batches of 1000 to prevent too large query error
+		// pq: got 104686 parameters but PostgreSQL only supports 65535 parameters
+		if len(valueStrings) > 1000 { // 17 fields x 1000 = 17000 field parameters
+			stmt := fmt.Sprintf("INSERT INTO grid_cells (%s) VALUES %s", fields, strings.Join(valueStrings, ","))
+			err := tx.Exec(stmt, valueArgs...).Error
+			if err != nil {
+				tx.Rollback()
+				return err
+			}
+
+			valueStrings = make([]string, 0)
+			valueArgs = make([]interface{}, 0)
+		}
+	}
+
+	if len(valueStrings) == 0 {
+		log.Println("nothing in last batch")
+		return nil
 	}
 
 	// We can do an insert here rather than an update, because the existing grid cells have been deleted during reprocessing before we get here

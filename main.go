@@ -94,7 +94,8 @@ var (
 
 func main() {
 
-	reprocess := flag.Bool("reprocess", false, "a bool")
+	reprocess := flag.Bool("reprocess", false, "Reprocess all or specific gateways")
+	offset := flag.Int("offset", 0, "Skip this number of gateways when reprocessing all")
 	flag.Parse()
 	reprocess_gateways := flag.Args()
 
@@ -147,7 +148,7 @@ func main() {
 		if len(reprocess_gateways) > 0 {
 			ReprocessGateways(reprocess_gateways)
 		} else {
-			ReprocessAll()
+			ReprocessAll(*offset)
 		}
 
 	} else {
@@ -167,14 +168,20 @@ func main() {
 
 }
 
-func ReprocessAll() {
+func ReprocessAll(offset int) {
 	log.Println("All gateways")
 
 	// Get all records
 	var gateways []types.Gateway
-	db.Find(&gateways)
+	db.Order("id asc").Find(&gateways)
 
 	for i, gateway := range gateways {
+		if i < offset {
+			continue
+		}
+		//if gateway.ID > 10000 {
+		//	break
+		//}
 		log.Println(i, "/", len(gateways), " ", gateway.NetworkId, " - ", gateway.GatewayId)
 		ReprocessSingleGateway(gateway)
 	}
@@ -209,7 +216,7 @@ AND gateway_id = ?`
 		timeRow := db.Raw(lastMovedQuery, antenna.NetworkId, antenna.GatewayId).Row()
 		timeRow.Scan(&movedTime)
 
-		log.Println(movedTime)
+		log.Println("Last move", movedTime)
 
 		ReprocessAntenna(antenna, movedTime)
 	}
