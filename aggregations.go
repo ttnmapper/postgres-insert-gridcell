@@ -152,14 +152,15 @@ func ReprocessAntenna(antenna types.Antenna, installedAtLocation time.Time) {
 		gatewayGridCells[gridCellIndexer] = gridCell
 	}
 
+	// Delete old cells
+	db.Where(&types.GridCell{AntennaID: antenna.ID}).Delete(&types.GridCell{})
+
 	if len(gatewayGridCells) == 0 {
 		log.Println("No packets")
 		return
 	}
 	fmt.Println()
 
-	// Delete old cells
-	db.Where(&types.GridCell{AntennaID: antenna.ID}).Delete(&types.GridCell{})
 	// Then add new ones
 	err = StoreGridCellsInDb(gatewayGridCells)
 	if err != nil {
