@@ -32,6 +32,8 @@ type Configuration struct {
 	PostgresDebugLog bool   `env:"POSTGRES_DEBUG_LOG"`
 
 	PrometheusPort string `env:"PROMETHEUS_PORT"`
+
+	GatewayMaximumRangeKm float64 `env:"GATEWAY_MAX_RANGE"`
 }
 
 var myConfiguration = Configuration{
@@ -52,6 +54,8 @@ var myConfiguration = Configuration{
 	PostgresDebugLog: false,
 
 	PrometheusPort: "9100",
+
+	GatewayMaximumRangeKm: 200,
 }
 
 var (

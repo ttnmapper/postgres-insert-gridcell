@@ -49,6 +49,9 @@ github.com/streadway/amqp
 # github.com/tkanos/gonfig v0.0.0-20181112185242-896f3d81fadf
 ## explicit
 github.com/tkanos/gonfig
+# github.com/umahmood/haversine v0.0.0-20151105152445-808ab04add26
+## explicit
+github.com/umahmood/haversine
 # golang.org/x/sys v0.0.0-20200615200032-f1bc736245b1
 golang.org/x/sys/internal/unsafeheader
 golang.org/x/sys/unix

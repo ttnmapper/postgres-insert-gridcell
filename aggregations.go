@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/j4/gosm"
+	"github.com/umahmood/haversine"
 	"log"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 
 var (
 	antennaDbCache  sync.Map
+	gatewayDbCache  sync.Map
 	gridCellDbCache sync.Map
 )
 
@@ -32,6 +34,11 @@ func aggregateNewData(message types.TtnMapperUplinkMessage) {
 	// Iterate gateways. We store it flat in the database
 	for _, gateway := range message.Gateways {
 		gatewayStart := time.Now()
+
+		// If the point is too far from the gateway, ignore it
+		if !CheckDistanceFromGateway(gateway, message) {
+			continue
+		}
 
 		var antennaID uint = 0
 
@@ -76,9 +83,12 @@ func aggregateMovedGateway(movedGateway types.TtnMapperGatewayMoved) {
 
 	processedMoved.Inc()
 
-	//seconds := movedGateway.Time / 1000000000
-	//nanos := movedGateway.Time % 1000000000
-	//movedTime := time.Unix(seconds, nanos)
+	// Delete gateway from gateway cache
+	gatewayIndexer := types.GatewayIndexer{
+		NetworkId: movedGateway.NetworkId,
+		GatewayId: movedGateway.GatewayId,
+	}
+	gatewayDbCache.Delete(gatewayIndexer)
 
 	var movedTime time.Time
 	lastMovedQuery := `
@@ -118,15 +128,17 @@ func ReprocessAntenna(antenna types.Antenna, installedAtLocation time.Time) {
 		gridCellDbCache.Delete(gridCellIndexer)
 	}
 
+	// Delete old cells from database
+	db.Where(&types.GridCell{AntennaID: antenna.ID}).Delete(&types.GridCell{})
+
 	gatewayGridCells := map[types.GridCellIndexer]types.GridCell{}
 
 	// Get all existing packets since gateway last moved
-	//db.Where("antenna_id = ? AND time > ? AND experiment_id IS NULL", antenna.ID, installedAtLocation).Find(&packets) // uses too much memory
 	rows, err := db.Model(&types.Packet{}).Where("antenna_id = ? AND time > ? AND experiment_id IS NULL", antenna.ID, installedAtLocation).Rows() // server side cursor
 	if err != nil {
 		log.Fatalf(err.Error())
 	}
-	defer rows.Close()
+
 	i := 0
 	for rows.Next() {
 		i++
@@ -137,6 +149,11 @@ func ReprocessAntenna(antenna types.Antenna, installedAtLocation time.Time) {
 		err := db.ScanRows(rows, &packet)
 		if err != nil {
 			log.Println(err.Error())
+			continue
+		}
+
+		// If the point is too far from the gateway, ignore it
+		if !CheckDistanceFromAntenna(antenna, packet) {
 			continue
 		}
 
@@ -151,9 +168,10 @@ func ReprocessAntenna(antenna types.Antenna, installedAtLocation time.Time) {
 		gridCellIndexer := types.GridCellIndexer{AntennaId: gridCell.AntennaID, X: gridCell.X, Y: gridCell.Y}
 		gatewayGridCells[gridCellIndexer] = gridCell
 	}
-
-	// Delete old cells
-	db.Where(&types.GridCell{AntennaID: antenna.ID}).Delete(&types.GridCell{})
+	err = rows.Close()
+	if err != nil {
+		log.Println(err.Error())
+	}
 
 	if len(gatewayGridCells) == 0 {
 		log.Println("No packets")
@@ -358,4 +376,62 @@ func incrementBucket(gridCell *types.GridCell, time time.Time, rssi float32, snr
 	}
 
 	updatedGridCells.Inc()
+}
+
+func CheckDistanceFromAntenna(antenna types.Antenna, packet types.Packet) bool {
+
+	gateway := types.TtnMapperGateway{NetworkId: antenna.NetworkId, GatewayId: antenna.GatewayId}
+	message := types.TtnMapperUplinkMessage{Latitude: packet.Latitude, Longitude: packet.Longitude}
+
+	return CheckDistanceFromGateway(gateway, message)
+}
+
+func CheckDistanceFromGateway(gateway types.TtnMapperGateway, message types.TtnMapperUplinkMessage) bool {
+	var gatewayDb types.Gateway
+
+	// Find the gateway so that we can check the distance of this point from the gateway
+	gatewayIndexer := types.GatewayIndexer{
+		NetworkId: gateway.NetworkId,
+		GatewayId: gateway.GatewayId,
+	}
+	i, ok := gatewayDbCache.Load(gatewayIndexer)
+	if ok {
+		//log.Println("Gateway from cache")
+		gatewayDb = i.(types.Gateway)
+	} else {
+		gatewayDb = types.Gateway{NetworkId: gateway.NetworkId, GatewayId: gateway.GatewayId}
+		//log.Println("Gateway from DB")
+		err := db.First(&gatewayDb, &gatewayDb).Error
+		if err != nil {
+			log.Println(err.Error())
+			return false // if we can't find the gateway, rather do not allow this point through
+		}
+		if gatewayDb.ID != 0 {
+			gatewayDbCache.Store(gatewayIndexer, gatewayDb)
+		}
+	}
+
+	gatewayLatitude := 0.0
+	if gatewayDb.Latitude != nil {
+		gatewayLatitude = *gatewayDb.Latitude
+	}
+	gatewayLongitude := 0.0
+	if gatewayDb.Longitude != nil {
+		gatewayLongitude = *gatewayDb.Longitude
+	}
+
+	if gatewayLatitude == 0 && gatewayLongitude == 0 {
+		// Null island, exclude gateways with unknown locations
+		return false
+	} else {
+		oldLocation := haversine.Coord{Lat: gatewayLatitude, Lon: gatewayLongitude}
+		newLocation := haversine.Coord{Lat: message.Latitude, Lon: message.Longitude}
+		_, km := haversine.Distance(oldLocation, newLocation)
+
+		if km > myConfiguration.GatewayMaximumRangeKm {
+			return false
+		} else {
+			return true
+		}
+	}
 }
