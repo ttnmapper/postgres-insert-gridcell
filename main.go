@@ -2,12 +2,13 @@ package main
 
 import (
 	"flag"
-	"github.com/jinzhu/gorm"
-	_ "github.com/jinzhu/gorm/dialects/postgres"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/tkanos/gonfig"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 	"log"
 	"net/http"
 	"time"
@@ -118,32 +119,30 @@ func main() {
 		}
 	}()
 
-	// Table name prefixes
-	gorm.DefaultTableNameHandler = func(db *gorm.DB, defaultTableName string) string {
-		//return "ttnmapper_" + defaultTableName
-		return defaultTableName
-	}
-
-	var dbErr error
-	// pq: unsupported sslmode "prefer"; only "require" (default), "verify-full", "verify-ca", and "disable" supported - so we disable it
-	db, dbErr = gorm.Open("postgres", "host="+myConfiguration.PostgresHost+" port="+myConfiguration.PostgresPort+" user="+myConfiguration.PostgresUser+" dbname="+myConfiguration.PostgresDatabase+" password="+myConfiguration.PostgresPassword+" sslmode=disable")
-	if dbErr != nil {
-		log.Println("Error connecting to Postgres")
-		panic(dbErr.Error())
-	}
-	defer db.Close()
-
+	var gormLogLevel = logger.Silent
 	if myConfiguration.PostgresDebugLog {
-		db.LogMode(true)
+		log.Println("Database debug logging enabled")
+		gormLogLevel = logger.Info
+	}
+
+	// pq: unsupported sslmode "prefer"; only "require" (default), "verify-full", "verify-ca", and "disable" supported - so we disable it
+	db, err = gorm.Open(postgres.Open("host="+myConfiguration.PostgresHost+" port="+myConfiguration.PostgresPort+" user="+myConfiguration.PostgresUser+" dbname="+myConfiguration.PostgresDatabase+" password="+myConfiguration.PostgresPassword+" sslmode=disable"), &gorm.Config{
+		Logger:          logger.Default.LogMode(gormLogLevel),
+		CreateBatchSize: 1000,
+	})
+	if err != nil {
+		panic(err.Error())
 	}
 
 	// Create tables if they do not exist
-	log.Println("Performing auto migrate")
-	db.AutoMigrate(
-		// TODO: add the tables this service is responsible for maintaining
-		//&types.Gateway{},
-		&types.GridCell{},
-	)
+	//log.Println("Performing auto migrate")
+	//if err := db.AutoMigrate(
+	//	// TODO: add the tables this service is responsible for maintaining
+	//	//&types.Gateway{},
+	//	&types.GridCell{},
+	//); err != nil {
+	//	log.Println("Unable autoMigrateDB - " + err.Error())
+	//}
 
 	// Should we reprocess or listen for live data?
 	if *reprocess {
