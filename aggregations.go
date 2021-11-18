@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/j4/gosm"
 	"github.com/umahmood/haversine"
+	"gorm.io/gorm/clause"
 	"log"
 	"sync"
 	"time"
@@ -127,9 +128,6 @@ func ReprocessAntenna(antenna types.Antenna, installedAtLocation time.Time) {
 		gridCellDbCache.Delete(gridCellIndexer)
 	}
 
-	// Delete old cells from database
-	db.Where(&types.GridCell{AntennaID: antenna.ID}).Delete(&types.GridCell{})
-
 	gatewayGridCells := map[types.GridCellIndexer]types.GridCell{}
 
 	// Get all existing packets since gateway last moved
@@ -171,6 +169,9 @@ func ReprocessAntenna(antenna types.Antenna, installedAtLocation time.Time) {
 	if err != nil {
 		log.Println(err.Error())
 	}
+
+	// Delete old cells from database
+	db.Where(&types.GridCell{AntennaID: antenna.ID}).Delete(&types.GridCell{})
 
 	if len(gatewayGridCells) == 0 {
 		log.Println("No packets")
@@ -286,7 +287,10 @@ func StoreGridCellsInDb(gridCells map[types.GridCellIndexer]types.GridCell) erro
 		gridCellsSlice = append(gridCellsSlice, val)
 	}
 
-	tx := db.Create(&gridCellsSlice)
+	// On conflict override
+	tx := db.Clauses(clause.OnConflict{
+		UpdateAll: true,
+	}).Create(&gridCellsSlice)
 	return tx.Error
 }
 
